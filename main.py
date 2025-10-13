@@ -18,11 +18,11 @@ class StreamTranscriber:
         self.transcription_text = ""
         self.whisper_model = None
         
-    def load_whisper_model(self, model_size="base"):
+    def load_whisper_model(self, model_size="tiny"):
         """Load OpenAI Whisper model"""
         try:
             if self.whisper_model is None:
-                with st.spinner(f"Loading Whisper {model_size} model..."):
+                with st.spinner(f"Loading Whisper {model_size} model (this may take a few minutes on first run)..."):
                     self.whisper_model = whisper.load_model(model_size)
             return True
         except Exception as e:
@@ -67,7 +67,7 @@ class StreamTranscriber:
             st.error(f"Error extracting audio: {str(e)}")
             return None, None
     
-    def transcribe_audio_file(self, audio_file_path, use_whisper=True, model_size="base"):
+    def transcribe_audio_file(self, audio_file_path, use_whisper=True, model_size="tiny"):
         """Transcribe audio file to text using OpenAI Whisper or Google Speech Recognition"""
         try:
             if use_whisper:
@@ -78,7 +78,7 @@ class StreamTranscriber:
             st.error(f"Error transcribing audio: {str(e)}")
             return ""
     
-    def transcribe_with_whisper(self, audio_file_path, model_size="base"):
+    def transcribe_with_whisper(self, audio_file_path, model_size="tiny"):
         """Transcribe using OpenAI Whisper"""
         try:
             # Load Whisper model
@@ -146,7 +146,7 @@ class StreamTranscriber:
             st.error(f"Error saving Word document: {str(e)}")
             return False
     
-    def process_youtube_url(self, url, use_whisper=True, model_size="base"):
+    def process_youtube_url(self, url, use_whisper=True, model_size="tiny"):
         """Main method to process YouTube URL and create transcription"""
         with st.spinner("Extracting audio from YouTube..."):
             title, audio_file = self.extract_audio_from_youtube(url)
@@ -201,10 +201,10 @@ def main():
         if use_whisper:
             model_size = st.selectbox("Whisper Model Size", 
                                     ["tiny", "base", "small", "medium", "large"],
-                                    index=1,
+                                    index=0,
                                     help="Larger models = better accuracy but slower processing")
         else:
-            model_size = "base"  # Not used for Google Speech Recognition
+            model_size = "tiny"  # Not used for Google Speech Recognition
     
     col1, col2 = st.columns([1, 4])
     
