@@ -87,7 +87,18 @@ class StreamTranscriber:
             
             # Transcribe with Whisper
             with st.spinner("Transcribing with OpenAI Whisper..."):
-                result = self.whisper_model.transcribe(audio_file_path)
+                # Add timeout and progress indication
+                import time
+                start_time = time.time()
+                
+                result = self.whisper_model.transcribe(
+                    audio_file_path,
+                    fp16=False,  # Force FP32 to avoid warnings
+                    verbose=False  # Reduce output
+                )
+                
+                elapsed_time = time.time() - start_time
+                st.info(f"Transcription completed in {elapsed_time:.1f} seconds")
                 return result["text"]
                 
         except Exception as e:
