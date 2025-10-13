@@ -8,25 +8,28 @@ import os
 import threading
 import time
 from datetime import datetime
-import whisper
-import torch
+import openai
 
 class StreamTranscriber:
     def __init__(self):
         self.recognizer = sr.Recognizer()
         self.is_recording = False
         self.transcription_text = ""
-        self.whisper_model = None
+        self.openai_client = None
         
-    def load_whisper_model(self, model_size="tiny"):
-        """Load OpenAI Whisper model"""
+    def setup_openai_client(self, api_key):
+        """Setup OpenAI client with API key"""
         try:
-            if self.whisper_model is None:
-                with st.spinner(f"Loading Whisper {model_size} model (this may take a few minutes on first run)..."):
-                    self.whisper_model = whisper.load_model(model_size)
+            if not api_key:
+                st.error("OpenAI API key is required for Whisper API")
+                return False
+            
+            # Set the API key directly
+            openai.api_key = api_key
+            self.openai_client = openai.OpenAI(api_key=api_key)
             return True
         except Exception as e:
-            st.error(f"Error loading Whisper model: {str(e)}")
+            st.error(f"Error setting up OpenAI client: {str(e)}")
             return False
         
     def extract_audio_from_youtube(self, url):
@@ -67,42 +70,105 @@ class StreamTranscriber:
             st.error(f"Error extracting audio: {str(e)}")
             return None, None
     
-    def transcribe_audio_file(self, audio_file_path, use_whisper=True, model_size="tiny"):
-        """Transcribe audio file to text using OpenAI Whisper or Google Speech Recognition"""
+    def transcribe_audio_file(self, audio_file_path, use_whisper_api=True, api_key=None):
+        """Transcribe audio file to text using OpenAI Whisper API or Google Speech Recognition"""
         try:
-            if use_whisper:
-                return self.transcribe_with_whisper(audio_file_path, model_size)
+            if use_whisper_api:
+                return self.transcribe_with_whisper_api(audio_file_path, api_key)
             else:
                 return self.transcribe_with_google(audio_file_path)
         except Exception as e:
             st.error(f"Error transcribing audio: {str(e)}")
             return ""
     
-    def transcribe_with_whisper(self, audio_file_path, model_size="tiny"):
-        """Transcribe using OpenAI Whisper"""
+    def transcribe_with_whisper_api(self, audio_file_path, api_key):
+        """Transcribe using OpenAI Whisper API"""
         try:
-            # Load Whisper model
-            if not self.load_whisper_model(model_size):
-                return ""
+            # Set API key directly
+            openai.api_key = api_key
             
-            # Transcribe with Whisper
-            with st.spinner("Transcribing with OpenAI Whisper..."):
-                # Add timeout and progress indication
-                import time
+            # Load and process audio
+            audio = AudioSegment.from_file(audio_file_path)
+            
+            # Convert to mono and reduce sample rate for better compression
+            audio = audio.set_frame_rate(16000).set_channels(1)
+            
+            # Calculate duration and determine if we need to chunk
+            duration_minutes = len(audio) / (1000 * 60)
+            max_duration_minutes = 25  # Conservative limit for 25MB
+            
+            if duration_minutes > max_duration_minutes:
+                return self.transcribe_large_audio_chunked(audio, api_key)
+            else:
+                return self.transcribe_single_chunk(audio, api_key)
+                
+        except Exception as e:
+            st.error(f"Error with Whisper API transcription: {str(e)}")
+            return ""
+    
+    def transcribe_single_chunk(self, audio, api_key):
+        """Transcribe a single audio chunk"""
+        try:
+            temp_mp3 = tempfile.mktemp(suffix='.mp3')
+            
+            # Export with aggressive compression
+            audio.export(temp_mp3, format="mp3", bitrate="32k")
+            
+            # Check file size
+            file_size = os.path.getsize(temp_mp3)
+            if file_size > 25 * 1024 * 1024:  # 25MB limit
+                st.warning("File still too large, trying more aggressive compression...")
+                audio = audio.set_frame_rate(8000)  # Further reduce sample rate
+                audio.export(temp_mp3, format="mp3", bitrate="16k")
+            
+            # Transcribe with Whisper API
+            with st.spinner("Transcribing with OpenAI Whisper API..."):
                 start_time = time.time()
                 
-                result = self.whisper_model.transcribe(
-                    audio_file_path,
-                    fp16=False,  # Force FP32 to avoid warnings
-                    verbose=False  # Reduce output
-                )
+                with open(temp_mp3, "rb") as audio_file:
+                    transcript = openai.Audio.transcribe("whisper-1", audio_file)
                 
                 elapsed_time = time.time() - start_time
                 st.info(f"Transcription completed in {elapsed_time:.1f} seconds")
-                return result["text"]
+                
+                # Clean up temp file
+                if os.path.exists(temp_mp3):
+                    os.remove(temp_mp3)
+                
+                return transcript.text
                 
         except Exception as e:
-            st.error(f"Error with Whisper transcription: {str(e)}")
+            st.error(f"Error transcribing single chunk: {str(e)}")
+            return ""
+    
+    def transcribe_large_audio_chunked(self, audio, api_key):
+        """Transcribe large audio by splitting into chunks"""
+        try:
+            chunk_duration_ms = 20 * 60 * 1000  # 20 minutes per chunk
+            total_chunks = (len(audio) // chunk_duration_ms) + 1
+            
+            st.info(f"Large audio detected. Splitting into {total_chunks} chunks for processing...")
+            
+            full_transcript = ""
+            
+            for i in range(total_chunks):
+                start_time = i * chunk_duration_ms
+                end_time = min((i + 1) * chunk_duration_ms, len(audio))
+                
+                if start_time >= len(audio):
+                    break
+                
+                chunk = audio[start_time:end_time]
+                
+                with st.spinner(f"Processing chunk {i+1}/{total_chunks}..."):
+                    chunk_transcript = self.transcribe_single_chunk(chunk, api_key)
+                    if chunk_transcript:
+                        full_transcript += chunk_transcript + " "
+            
+            return full_transcript.strip()
+            
+        except Exception as e:
+            st.error(f"Error transcribing large audio: {str(e)}")
             return ""
     
     def transcribe_with_google(self, audio_file_path):
@@ -157,7 +223,7 @@ class StreamTranscriber:
             st.error(f"Error saving Word document: {str(e)}")
             return False
     
-    def process_youtube_url(self, url, use_whisper=True, model_size="tiny"):
+    def process_youtube_url(self, url, use_whisper_api=True, api_key=None):
         """Main method to process YouTube URL and create transcription"""
         with st.spinner("Extracting audio from YouTube..."):
             title, audio_file = self.extract_audio_from_youtube(url)
@@ -166,7 +232,7 @@ class StreamTranscriber:
             return False
             
         with st.spinner("Transcribing audio..."):
-            transcription = self.transcribe_audio_file(audio_file, use_whisper, model_size)
+            transcription = self.transcribe_audio_file(audio_file, use_whisper_api, api_key)
             
         if not transcription:
             return False
@@ -202,20 +268,22 @@ def main():
     
     # Advanced options
     st.header("⚙️ Transcription Options")
+    
+    # API Key input
+    api_key = st.text_input("OpenAI API Key:", type="password", 
+                           help="Get your API key from https://platform.openai.com/api-keys")
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        use_whisper = st.checkbox("Use OpenAI Whisper (Recommended)", value=True, 
-                                 help="Better accuracy and supports multiple languages")
+        use_whisper_api = st.checkbox("Use OpenAI Whisper API (Recommended)", value=True, 
+                                     help="Faster, more accurate, and supports multiple languages")
     
     with col2:
-        if use_whisper:
-            model_size = st.selectbox("Whisper Model Size", 
-                                    ["tiny", "base", "small", "medium", "large"],
-                                    index=0,
-                                    help="Larger models = better accuracy but slower processing")
+        if not use_whisper_api:
+            st.info("Using Google Speech Recognition (requires internet)")
         else:
-            model_size = "tiny"  # Not used for Google Speech Recognition
+            st.info("Using OpenAI Whisper API (requires API key)")
     
     col1, col2 = st.columns([1, 4])
     
@@ -224,20 +292,23 @@ def main():
     
     with col2:
         if transcribe_button and url:
-            if transcriber.process_youtube_url(url, use_whisper, model_size):
+            if use_whisper_api and not api_key:
+                st.error("Please enter your OpenAI API key to use Whisper API")
+            elif transcriber.process_youtube_url(url, use_whisper_api, api_key):
                 st.balloons()
             else:
-                st.error("Transcription failed. Please check the URL and try again.")
+                st.error("Transcription failed. Please check the URL and API key, then try again.")
     
     # Instructions
     st.header("📋 How to Use")
     st.markdown("""
-    1. **Copy a YouTube URL** - Paste any YouTube video or livestream URL
-    2. **Choose transcription method** - Select OpenAI Whisper (recommended) or Google Speech Recognition
-    3. **Click Transcribe** - The app will extract audio and transcribe it
-    4. **Download** - Get your Word document with the transcription
+    1. **Get OpenAI API Key** - Sign up at [OpenAI Platform](https://platform.openai.com/api-keys)
+    2. **Copy a YouTube URL** - Paste any YouTube video or livestream URL
+    3. **Enter API Key** - Paste your OpenAI API key (required for Whisper API)
+    4. **Click Transcribe** - The app will extract audio and transcribe it
+    5. **Download** - Get your Word document with the transcription
     
-    **Note:** OpenAI Whisper works offline after initial model download. Google Speech Recognition requires internet.
+    **Note:** OpenAI Whisper API is faster and more accurate. Google Speech Recognition is free but requires internet.
     """)
     
     # Features
@@ -245,11 +316,12 @@ def main():
     st.markdown("""
     - 🎥 **YouTube Support** - Works with videos and livestreams
     - 🎵 **Audio Extraction** - Automatically extracts audio from video
-    - 🤖 **OpenAI Whisper** - State-of-the-art speech recognition with multi-language support
-    - 🌐 **Google Speech Recognition** - Fallback option requiring internet connection
+    - 🤖 **OpenAI Whisper API** - Fast, accurate speech recognition with multi-language support
+    - 🌐 **Google Speech Recognition** - Free fallback option requiring internet connection
     - 📄 **Word Documents** - Saves transcriptions in .docx format
     - ⚡ **Fast Processing** - Quick transcription and document generation
-    - 🔧 **Model Selection** - Choose Whisper model size based on accuracy vs speed needs
+    - 🔒 **Secure** - API keys are not stored, processed locally only
+    - 💰 **Cost Effective** - Pay only for what you use (~$0.006 per minute)
     """)
 
 if __name__ == "__main__":
