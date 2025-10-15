@@ -24,8 +24,7 @@ class StreamTranscriber:
                 st.error("OpenAI API key is required for Whisper API")
                 return False
             
-            # Set the API key directly
-            openai.api_key = api_key
+            # Test the API key by creating a client
             self.openai_client = openai.OpenAI(api_key=api_key)
             return True
         except Exception as e:
@@ -37,37 +36,58 @@ class StreamTranscriber:
         try:
             # Create temporary directory for download
             temp_dir = tempfile.mkdtemp()
+            st.info(f"Created temporary directory: {temp_dir}")
             
             ydl_opts = {
-                'format': 'bestaudio/best',
+                'format': 'worstaudio[ext=m4a]/worstaudio/bestaudio[abr<=128]/bestaudio[abr<=256]/bestaudio',
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
                 'noplaylist': True,
-                'quiet': True,
-                'no_warnings': True,
+                'quiet': False,  # Enable verbose output for debugging
+                'no_warnings': False,  # Show warnings for debugging
+                'extract_flat': False,
+                'writeinfojson': False,
+                'writesubtitles': False,
+                'writeautomaticsub': False,
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_insecure': True,
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             }
             
+            st.info("Initializing YouTube downloader...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                st.info("Extracting video information...")
                 # First get info to extract title
                 info = ydl.extract_info(url, download=False)
                 title = info.get('title', 'Unknown')
+                st.info(f"Video title: {title}")
                 
                 # Clean title for filename
                 safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()
                 
+                st.info("Starting audio download...")
                 # Download the audio
                 ydl.download([url])
+                st.info("Download completed, searching for audio files...")
                 
                 # Find the downloaded file
-                downloaded_files = [f for f in os.listdir(temp_dir) if f.endswith(('.wav', '.webm', '.m4a', '.mp3', '.ogg'))]
+                downloaded_files = [f for f in os.listdir(temp_dir) if f.endswith(('.wav', '.webm', '.m4a', '.mp3', '.ogg', '.opus'))]
+                st.info(f"Found files in temp directory: {os.listdir(temp_dir)}")
+                
                 if downloaded_files:
                     audio_file = os.path.join(temp_dir, downloaded_files[0])
+                    st.success(f"Audio file found: {downloaded_files[0]}")
                     return title, audio_file
                 else:
                     st.error("No audio file was downloaded")
+                    st.error(f"Files in temp directory: {os.listdir(temp_dir)}")
                     return None, None
                 
         except Exception as e:
             st.error(f"Error extracting audio: {str(e)}")
+            st.error(f"Error type: {type(e).__name__}")
+            import traceback
+            st.error(f"Full traceback: {traceback.format_exc()}")
             return None, None
     
     def transcribe_audio_file(self, audio_file_path, use_whisper_api=True, api_key=None):
@@ -84,9 +104,6 @@ class StreamTranscriber:
     def transcribe_with_whisper_api(self, audio_file_path, api_key):
         """Transcribe using OpenAI Whisper API"""
         try:
-            # Set API key directly
-            openai.api_key = api_key
-            
             # Load and process audio
             audio = AudioSegment.from_file(audio_file_path)
             
@@ -125,8 +142,13 @@ class StreamTranscriber:
             with st.spinner("Transcribing with OpenAI Whisper API..."):
                 start_time = time.time()
                 
+                # Use the client-based approach
+                client = openai.OpenAI(api_key=api_key)
                 with open(temp_mp3, "rb") as audio_file:
-                    transcript = openai.Audio.transcribe("whisper-1", audio_file)
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file
+                    )
                 
                 elapsed_time = time.time() - start_time
                 st.info(f"Transcription completed in {elapsed_time:.1f} seconds")
@@ -225,29 +247,37 @@ class StreamTranscriber:
     
     def process_youtube_url(self, url, use_whisper_api=True, api_key=None):
         """Main method to process YouTube URL and create transcription"""
-        with st.spinner("Extracting audio from YouTube..."):
-            title, audio_file = self.extract_audio_from_youtube(url)
+        try:
+            with st.spinner("Extracting audio from YouTube..."):
+                title, audio_file = self.extract_audio_from_youtube(url)
             
-        if not title or not audio_file:
-            return False
+            if not title or not audio_file:
+                st.error("Failed to extract audio from YouTube. Please check the URL and try again.")
+                return False
+                
+            with st.spinner("Transcribing audio..."):
+                transcription = self.transcribe_audio_file(audio_file, use_whisper_api, api_key)
+                
+            if not transcription:
+                st.error("Failed to transcribe audio. Please check your API key and try again.")
+                return False
+                
+            # Save to Word document
+            output_filename = f"{title.replace(' ', '_')}_transcription.docx"
+            output_path = os.path.join(os.getcwd(), output_filename)
             
-        with st.spinner("Transcribing audio..."):
-            transcription = self.transcribe_audio_file(audio_file, use_whisper_api, api_key)
-            
-        if not transcription:
-            return False
-            
-        # Save to Word document
-        output_filename = f"{title.replace(' ', '_')}_transcription.docx"
-        output_path = os.path.join(os.getcwd(), output_filename)
-        
-        with st.spinner("Saving to Word document..."):
-            success = self.save_to_word_document(transcription, title, output_path)
-            
-        if success:
-            st.success(f"Transcription saved as: {output_filename}")
-            return True
-        else:
+            with st.spinner("Saving to Word document..."):
+                success = self.save_to_word_document(transcription, title, output_path)
+                
+            if success:
+                st.success(f"Transcription saved as: {output_filename}")
+                return True
+            else:
+                st.error("Failed to save Word document.")
+                return False
+                
+        except Exception as e:
+            st.error(f"Unexpected error: {str(e)}")
             return False
 
 def main():
