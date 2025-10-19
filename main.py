@@ -52,6 +52,11 @@ class StreamTranscriber:
                 'no_check_certificate': True,
                 'prefer_insecure': True,
                 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                # Livestream specific options
+                'live_from_start': False,  # Don't try to download from start of livestream
+                'wait_for_video': (1, 30),  # Wait 1-30 seconds for video to be available
+                'retries': 3,  # Retry failed downloads
+                'fragment_retries': 3,  # Retry failed fragments
             }
             
             st.info("Initializing YouTube downloader...")
