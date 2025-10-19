@@ -59,8 +59,14 @@ class StreamTranscriber:
                 st.info("Extracting video information...")
                 # First get info to extract title
                 info = ydl.extract_info(url, download=False)
-                title = info.get('title', 'Unknown')
-                st.info(f"Video title: {title}")
+                
+                # Handle case where info is None (common with livestreams)
+                if info is None:
+                    st.warning("Could not extract video info, trying direct download...")
+                    title = "Livestream_Recording"
+                else:
+                    title = info.get('title', 'Unknown')
+                    st.info(f"Video title: {title}")
                 
                 # Clean title for filename
                 safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()
@@ -290,18 +296,41 @@ def main():
     st.title("🎵 Stream Transcriber")
     st.markdown("Transcribe YouTube videos and livestreams to Word documents")
     
-    transcriber = StreamTranscriber()
+    # Initialize transcriber in session state to avoid reinitialization
+    if 'transcriber' not in st.session_state:
+        st.session_state.transcriber = StreamTranscriber()
+    
+    transcriber = st.session_state.transcriber
     
     # Input section
     st.header("📝 Enter YouTube URL")
-    url = st.text_input("YouTube Video or Livestream URL:", placeholder="https://www.youtube.com/watch?v=...")
+    
+    # URL input with session state
+    if 'url' not in st.session_state:
+        st.session_state.url = ""
+    
+    url = st.text_input("YouTube Video or Livestream URL:", 
+                       value=st.session_state.url,
+                       placeholder="https://www.youtube.com/watch?v=...")
+    
+    # Update session state when URL changes
+    if url != st.session_state.url:
+        st.session_state.url = url
     
     # Advanced options
     st.header("⚙️ Transcription Options")
     
-    # API Key input
+    # API Key input with session state
+    if 'api_key' not in st.session_state:
+        st.session_state.api_key = ""
+    
     api_key = st.text_input("OpenAI API Key:", type="password", 
+                           value=st.session_state.api_key,
                            help="Get your API key from https://platform.openai.com/api-keys")
+    
+    # Update session state when API key changes
+    if api_key != st.session_state.api_key:
+        st.session_state.api_key = api_key
     
     col1, col2 = st.columns(2)
     
